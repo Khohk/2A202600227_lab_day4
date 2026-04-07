@@ -195,3 +195,216 @@ def calculate_budget(total_budget: int, expenses: str) -> str:
         return f"Lỗi: số tiền không hợp lệ — {str(e)}"
     except Exception as e:
         return f"Lỗi khi tính ngân sách: {str(e)}"
+
+
+# ==================================================
+# TOOL 4: search_by_budget
+# ==================================================
+
+@tool
+def search_by_budget(origin: str, budget: int) -> str:
+    """
+    Tìm tất cả điểm đến có thể đi từ một thành phố trong phạm vi ngân sách vé máy bay.
+    Tham số:
+    - origin: thành phố khởi hành (VD: 'Hà Nội', 'Hồ Chí Minh')
+    - budget: ngân sách tối đa cho vé máy bay (VNĐ)
+    Trả về danh sách điểm đến và chuyến bay rẻ nhất phù hợp ngân sách.
+    """
+    try:
+        matches = []
+        for (orig, dest), flights in FLIGHTS_DB.items():
+            if orig == origin:
+                affordable = [f for f in flights if f["price"] <= budget]
+                if affordable:
+                    cheapest = min(affordable, key=lambda f: f["price"])
+                    matches.append((dest, cheapest))
+            elif dest == origin:
+                affordable = [f for f in flights if f["price"] <= budget]
+                if affordable:
+                    cheapest = min(affordable, key=lambda f: f["price"])
+                    matches.append((orig, cheapest))
+
+        if not matches:
+            budget_str = f"{budget:,}".replace(",", ".")
+            return f"Không tìm thấy chuyến bay nào từ {origin} trong tầm {budget_str}đ."
+
+        budget_str = f"{budget:,}".replace(",", ".")
+        result = f"Điểm đến từ {origin} trong tầm {budget_str}đ:\n"
+        result += "-" * 40 + "\n"
+        for dest, f in sorted(matches, key=lambda x: x[1]["price"]):
+            price_str = f"{f['price']:,}".replace(",", ".")
+            result += (
+                f"- {dest}: {f['airline']} {f['departure']}→{f['arrival']} | {price_str}đ ({f['class']})\n"
+            )
+        return result
+
+    except Exception as e:
+        return f"Lỗi khi tìm theo ngân sách: {str(e)}"
+
+
+# ==================================================
+# TOOL 5: compare_options
+# ==================================================
+
+@tool
+def compare_options(origin: str, destination1: str, destination2: str, budget: int, nights: int) -> str:
+    """
+    So sánh tổng chi phí (vé rẻ nhất + khách sạn tốt nhất trong tầm tiền) giữa 2 điểm đến.
+    Tham số:
+    - origin: thành phố khởi hành (VD: 'Hà Nội')
+    - destination1: điểm đến thứ nhất (VD: 'Đà Nẵng')
+    - destination2: điểm đến thứ hai (VD: 'Phú Quốc')
+    - budget: tổng ngân sách (VNĐ)
+    - nights: số đêm ở lại
+    Trả về bảng so sánh và gợi ý điểm đến phù hợp hơn.
+    """
+    def _analyze(dest):
+        # Tìm vé rẻ nhất
+        flights = FLIGHTS_DB.get((origin, dest)) or FLIGHTS_DB.get((dest, origin)) or []
+        if not flights:
+            return None, f"Không có chuyến bay từ {origin} đến {dest}."
+        cheapest_flight = min(flights, key=lambda f: f["price"])
+        flight_cost = cheapest_flight["price"]
+
+        # Tính budget còn lại cho khách sạn mỗi đêm
+        hotel_budget_per_night = (budget - flight_cost) // nights if nights > 0 else 0
+        hotels = HOTELS_DB.get(dest, [])
+        affordable_hotels = [h for h in hotels if h["price_per_night"] <= hotel_budget_per_night]
+
+        if not affordable_hotels:
+            best_hotel = min(hotels, key=lambda h: h["price_per_night"]) if hotels else None
+        else:
+            best_hotel = max(affordable_hotels, key=lambda h: h["rating"])
+
+        hotel_cost = best_hotel["price_per_night"] * nights if best_hotel else 0
+        total = flight_cost + hotel_cost
+        fits = total <= budget
+
+        return {
+            "dest": dest,
+            "flight": cheapest_flight,
+            "flight_cost": flight_cost,
+            "hotel": best_hotel,
+            "hotel_cost": hotel_cost,
+            "total": total,
+            "fits": fits,
+        }, None
+
+    try:
+        info1, err1 = _analyze(destination1)
+        info2, err2 = _analyze(destination2)
+
+        result = f"So sánh: {destination1} vs {destination2} ({nights} đêm, ngân sách {budget:,}đ)\n".replace(",", ".")
+        result += "=" * 50 + "\n"
+
+        for info, err, dest in [(info1, err1, destination1), (info2, err2, destination2)]:
+            result += f"\n[{dest}]\n"
+            if err:
+                result += f"  {err}\n"
+                continue
+            f = info["flight"]
+            h = info["hotel"]
+            flight_str = f"{info['flight_cost']:,}".replace(",", ".")
+            hotel_str = f"{info['hotel_cost']:,}".replace(",", ".")
+            total_str = f"{info['total']:,}".replace(",", ".")
+            result += f"  Ve may bay: {f['airline']} {f['departure']}→{f['arrival']} | {flight_str}d\n"
+            if h:
+                result += f"  Khach san:  {h['name']} ({h['stars']} sao, {h['area']}) | {hotel_str}d ({nights} dem)\n"
+            result += f"  Tong: {total_str}d | {'Phu hop ngan sach' if info['fits'] else 'VUOT NGAN SACH'}\n"
+
+        # Gợi ý
+        result += "\n" + "-" * 50 + "\n"
+        if info1 and info2:
+            if info1["fits"] and not info2["fits"]:
+                result += f"=> Nen chon: {destination1} (vua ngan sach)\n"
+            elif info2["fits"] and not info1["fits"]:
+                result += f"=> Nen chon: {destination2} (vua ngan sach)\n"
+            elif info1["fits"] and info2["fits"]:
+                better = destination1 if info1["total"] <= info2["total"] else destination2
+                result += f"=> Ca hai deu phu hop. {better} tiet kiem hon.\n"
+            else:
+                cheaper = destination1 if info1["total"] <= info2["total"] else destination2
+                result += f"=> Ca hai deu vuot ngan sach. {cheaper} it vuot hon.\n"
+
+        return result
+
+    except Exception as e:
+        return f"Lỗi khi so sánh: {str(e)}"
+
+
+# ==================================================
+# TOOL 6: get_trip_summary
+# ==================================================
+
+@tool
+def get_trip_summary(origin: str, destination: str, nights: int, budget: int) -> str:
+    """
+    Tạo gói du lịch trọn gói: tìm vé máy bay + khách sạn phù hợp + tính ngân sách còn lại.
+    Tham số:
+    - origin: thành phố khởi hành (VD: 'Hà Nội')
+    - destination: thành phố đến (VD: 'Đà Nẵng', 'Phú Quốc')
+    - nights: số đêm lưu trú
+    - budget: tổng ngân sách (VNĐ)
+    Trả về kế hoạch hoàn chỉnh gồm vé, khách sạn và tổng chi phí.
+    """
+    try:
+        # --- Chuyến bay ---
+        flights = FLIGHTS_DB.get((origin, destination)) or FLIGHTS_DB.get((destination, origin)) or []
+        if not flights:
+            return f"Không tìm thấy chuyến bay từ {origin} đến {destination}."
+
+        cheapest_flight = min(flights, key=lambda f: f["price"])
+        flight_cost = cheapest_flight["price"]
+
+        # --- Khách sạn ---
+        remaining_after_flight = budget - flight_cost
+        hotel_budget_per_night = remaining_after_flight // nights if nights > 0 else 0
+        hotels = HOTELS_DB.get(destination, [])
+        affordable = [h for h in hotels if h["price_per_night"] <= hotel_budget_per_night]
+
+        if affordable:
+            best_hotel = max(affordable, key=lambda h: h["rating"])
+        elif hotels:
+            best_hotel = min(hotels, key=lambda h: h["price_per_night"])
+        else:
+            best_hotel = None
+
+        hotel_cost = best_hotel["price_per_night"] * nights if best_hotel else 0
+        total_cost = flight_cost + hotel_cost
+        remaining = budget - total_cost
+
+        # --- Format ---
+        budget_str = f"{budget:,}".replace(",", ".")
+        flight_str = f"{flight_cost:,}".replace(",", ".")
+        hotel_str = f"{hotel_cost:,}".replace(",", ".")
+        total_str = f"{total_cost:,}".replace(",", ".")
+        remaining_str = f"{abs(remaining):,}".replace(",", ".")
+
+        result = f"GOI DU LICH: {origin} → {destination} ({nights} dem)\n"
+        result += "=" * 50 + "\n"
+        result += f"Ve may bay:\n"
+        result += (
+            f"  {cheapest_flight['airline']} | "
+            f"{cheapest_flight['departure']}→{cheapest_flight['arrival']} | "
+            f"{flight_str}d ({cheapest_flight['class']})\n"
+        )
+        if best_hotel:
+            hotel_per_night_str = f"{best_hotel['price_per_night']:,}".replace(",", ".")
+            result += f"Khach san ({nights} dem):\n"
+            result += (
+                f"  {best_hotel['name']} | {best_hotel['stars']} sao | "
+                f"{hotel_per_night_str}d/dem | {best_hotel['area']} | Rating {best_hotel['rating']}\n"
+                f"  => {hotel_str}d\n"
+            )
+        result += "-" * 50 + "\n"
+        result += f"  Tong chi phi: {total_str}d\n"
+        result += f"  Ngan sach:    {budget_str}d\n"
+        if remaining >= 0:
+            result += f"  Con lai:      {remaining_str}d (co the dung an uong, tham quan)\n"
+        else:
+            result += f"  Vuot ngan sach: {remaining_str}d — can dieu chinh.\n"
+
+        return result
+
+    except Exception as e:
+        return f"Lỗi khi tạo gói du lịch: {str(e)}"

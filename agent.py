@@ -9,8 +9,11 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, BaseMessage
-from tools import search_flights, search_hotels, calculate_budget
+from langchain_core.messages import SystemMessage, BaseMessage, ToolMessage, AIMessage
+from tools import (
+    search_flights, search_hotels, calculate_budget,
+    search_by_budget, compare_options, get_trip_summary,
+)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,7 +35,14 @@ class AgentState(TypedDict):
 # ==================================================
 # 3. Khởi tạo LLM và Tools
 # ==================================================
-tools_list = [search_flights, search_hotels, calculate_budget]
+tools_list = [
+    search_flights,
+    search_hotels,
+    calculate_budget,
+    search_by_budget,
+    compare_options,
+    get_trip_summary,
+]
 llm = ChatOpenAI(model="gpt-4o-mini")
 llm_with_tools = llm.bind_tools(tools_list)
 
@@ -57,6 +67,9 @@ def _sanitize_messages(messages):
     return sanitized
 
 
+MAX_TOOL_CALLS = 5
+
+
 def agent_node(state: AgentState) -> dict:
     messages = _sanitize_messages(state["messages"])
 
@@ -64,10 +77,18 @@ def agent_node(state: AgentState) -> dict:
     if not isinstance(messages[0], SystemMessage):
         messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
 
-    response = llm_with_tools.invoke(messages)
+    # Đếm số lần đã gọi tool trong lượt này
+    tool_call_count = sum(1 for m in messages if isinstance(m, ToolMessage))
+
+    if tool_call_count >= MAX_TOOL_CALLS:
+        print(f"⚠️ Đã đạt giới hạn {MAX_TOOL_CALLS} lần gọi tool, buộc trả lời.")
+        # Gọi LLM không có tools để buộc trả lời trực tiếp
+        response = llm.invoke(messages)
+    else:
+        response = llm_with_tools.invoke(messages)
 
     # Logging
-    if response.tool_calls:
+    if isinstance(response, AIMessage) and response.tool_calls:
         for tc in response.tool_calls:
             print(f"🔧 Gọi tool: {tc['name']}({tc['args']})")
     else:
